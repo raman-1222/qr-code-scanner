@@ -147,14 +147,24 @@ class QRCodeScanner:
             # Process detected QR codes
             qr_results = []
             for i, qr_text in enumerate(decoded_info):
-                if qr_text:
+                # Convert numpy array to string if needed
+                if isinstance(qr_text, np.ndarray):
+                    qr_text = qr_text.item() if qr_text.size == 1 else str(qr_text)
+                
+                # Check if qr_text is not empty (safe comparison)
+                try:
+                    is_empty = len(qr_text) == 0 if hasattr(qr_text, '__len__') else not qr_text
+                except (TypeError, ValueError):
+                    is_empty = False
+                
+                if not is_empty:
                     qr_results.append(
                         {
                             "qr_index": i,
-                            "content": qr_text,
+                            "content": str(qr_text) if not isinstance(qr_text, str) else qr_text,
                             "scannable": True,
                             "valid": True,
-                            "length": len(qr_text),
+                            "length": len(str(qr_text)),
                         }
                     )
 
