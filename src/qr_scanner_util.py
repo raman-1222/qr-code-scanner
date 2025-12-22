@@ -108,81 +108,66 @@ class QRCodeScanner:
                 self.qr_detector.detectAndDecodeMulti(enhanced)
             )
 
-            # Process multi-detection results
-            # ret_val might be a numpy array, so check if it's not empty/False
-            if isinstance(ret_val, (list, tuple)):
-                has_detection = len(ret_val) > 0
-            else:
-                has_detection = bool(ret_val)
+            # Simplify: just try to get a list of detected QR codes
+            qr_codes = []
             
-            if has_detection and decoded_info is not None:
-                # Filter out empty strings from decoded_info
-                if isinstance(decoded_info, list):
-                    decoded_info = [info for info in decoded_info if info]
-                else:
-                    decoded_info = [decoded_info] if decoded_info else []
-            else:
-                decoded_info = []
-
-            # If multi-detection didn't work, try single detection
-            if not decoded_info:
-                result = self.qr_detector.detectAndDecode(enhanced)
-                # Handle both return formats (3 or 4 values depending on OpenCV version)
-                if len(result) == 4:
-                    ret_val, single_qr, points, straight_qr = result
-                else:
-                    ret_val, single_qr, points = result
-                
-                if single_qr:
-                    decoded_info = [single_qr]
-                else:
-                    # No QR codes found
-                    return {
-                        "success": True,
-                        "qr_found": False,
-                        "scannable": False,
-                        "message": "No QR code detected in the image",
-                    }
-
-            # Process detected QR codes
-            qr_results = []
-            for i, qr_text in enumerate(decoded_info):
-                # Convert numpy array to string if needed
-                if isinstance(qr_text, np.ndarray):
-                    qr_text = qr_text.item() if qr_text.size == 1 else str(qr_text)
-                
-                # Check if qr_text is not empty (safe comparison)
+            try:
+                # Handle multi-detection
+                if decoded_info is not None:
+                    if isinstance(decoded_info, np.ndarray):
+                        decoded_list = decoded_info.tolist()
+                    elif isinstance(decoded_info, (list, tuple)):
+                        decoded_list = list(decoded_info)
+                    else:
+                        decoded_list = [decoded_info]
+                    
+                    # Clean up and collect valid QR codes
+                    for qr_data in decoded_list:
+                        if qr_data is not None:
+                            qr_str = str(qr_data).strip().strip("()' \"")
+                            if qr_str and len(qr_str) > 0:
+                                qr_codes.append(qr_str)
+            except Exception as e:
+                logger.debug(f"Multi-detection processing failed: {e}")
+            
+            # If no codes found, try single detection
+            if not qr_codes:
                 try:
-                    is_empty = len(qr_text) == 0 if hasattr(qr_text, '__len__') else not qr_text
-                except (TypeError, ValueError):
-                    is_empty = False
-                
-                if not is_empty:
-                    qr_results.append(
-                        {
-                            "qr_index": i,
-                            "content": str(qr_text) if not isinstance(qr_text, str) else qr_text,
-                            "scannable": True,
-                            "valid": True,
-                            "length": len(str(qr_text)),
-                        }
-                    )
-
-            if qr_results:
+                    result = self.qr_detector.detectAndDecode(enhanced)
+                    single_qr = result[1] if len(result) > 1 else None
+                    
+                    if single_qr is not None:
+                        qr_str = str(single_qr).strip().strip("()' \"")
+                        if qr_str and len(qr_str) > 0:
+                            qr_codes.append(qr_str)
+                except Exception as e:
+                    logger.debug(f"Single detection failed: {e}")            
+            # Return results
+            if qr_codes:
+                qr_results = [
+                    {
+                        "qr_index": i,
+                        "content": code,
+                        "scannable": True,
+                        "valid": True,
+                        "length": len(code)
+                    }
+                    for i, code in enumerate(qr_codes)
+                ]
                 return {
                     "success": True,
                     "qr_found": True,
                     "scannable": True,
-                    "qr_count": len(qr_results),
+                    "qr_count": len(qr_codes),
                     "qr_codes": qr_results,
-                    "message": f"Successfully detected and scanned {len(qr_results)} QR code(s)",
+                    "message": f"Successfully detected and scanned {len(qr_codes)} QR code(s)",
                 }
             else:
                 return {
                     "success": True,
                     "qr_found": False,
                     "scannable": False,
-                    "message": "QR code pattern detected but unable to decode",
+                    "message": "No QR code detected in the image",
                 }
 
         except Exception as e:
