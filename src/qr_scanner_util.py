@@ -6,6 +6,7 @@ Core QR scanning logic - independent of any AI framework
 import base64
 import logging
 from typing import Any
+from io import BytesIO
 
 import cv2
 import numpy as np
@@ -154,4 +155,136 @@ class QRCodeScanner:
                 "error": str(e),
                 "qr_found": False,
                 "scannable": False,
+            }
+
+    def scan_pdf_file(self, pdf_path: str) -> dict[str, Any]:
+        """
+        Scan QR codes from all images in a PDF file
+        
+        Args:
+            pdf_path: Path to the PDF file
+            
+        Returns:
+            Dictionary with results for each image
+        """
+        try:
+            from pdf2image import convert_from_path
+            
+            logger.info(f"Scanning PDF: {pdf_path}")
+            
+            # Convert PDF pages to images
+            images = convert_from_path(pdf_path)
+            logger.info(f"Extracted {len(images)} pages from PDF")
+            
+            all_results = []
+            total_qr_found = 0
+            total_scannable = 0
+            
+            for page_num, image in enumerate(images, 1):
+                # Convert PIL image to numpy array
+                img_array = np.array(image)
+                
+                # Convert to BGR if RGB
+                if len(img_array.shape) == 3 and img_array.shape[2] == 3:
+                    img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+                
+                # Scan this page
+                result = self._analyze_qr_code(img_array)
+                result["page_number"] = page_num
+                all_results.append(result)
+                
+                if result.get("qr_found"):
+                    total_qr_found += 1
+                if result.get("scannable"):
+                    total_scannable += 1
+            
+            return {
+                "success": True,
+                "total_pages": len(images),
+                "pages_with_qr": total_qr_found,
+                "pages_scannable": total_scannable,
+                "qr_count": sum(r.get("qr_count", 0) for r in all_results),
+                "pages": all_results,
+                "message": f"Scanned {len(images)} pages, found QR codes in {total_qr_found} pages ({total_scannable} scannable)"
+            }
+            
+        except ImportError:
+            return {
+                "success": False,
+                "error": "pdf2image library not installed",
+                "qr_found": False
+            }
+        except Exception as e:
+            logger.error(f"Error scanning PDF: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "qr_found": False
+            }
+
+    def scan_pdf_base64(self, pdf_base64: str) -> dict[str, Any]:
+        """
+        Scan QR codes from a base64-encoded PDF file
+        
+        Args:
+            pdf_base64: Base64-encoded PDF data
+            
+        Returns:
+            Dictionary with results for each page
+        """
+        try:
+            from pdf2image import convert_from_bytes
+            
+            # Decode base64
+            pdf_data = base64.b64decode(pdf_base64)
+            logger.info("Scanning base64-encoded PDF")
+            
+            # Convert PDF to images
+            images = convert_from_bytes(pdf_data)
+            logger.info(f"Extracted {len(images)} pages from PDF")
+            
+            all_results = []
+            total_qr_found = 0
+            total_scannable = 0
+            
+            for page_num, image in enumerate(images, 1):
+                # Convert PIL image to numpy array
+                img_array = np.array(image)
+                
+                # Convert to BGR if RGB
+                if len(img_array.shape) == 3 and img_array.shape[2] == 3:
+                    img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+                
+                # Scan this page
+                result = self._analyze_qr_code(img_array)
+                result["page_number"] = page_num
+                all_results.append(result)
+                
+                if result.get("qr_found"):
+                    total_qr_found += 1
+                if result.get("scannable"):
+                    total_scannable += 1
+            
+            return {
+                "success": True,
+                "total_pages": len(images),
+                "pages_with_qr": total_qr_found,
+                "pages_scannable": total_scannable,
+                "qr_count": sum(r.get("qr_count", 0) for r in all_results),
+                "pages": all_results,
+                "message": f"Scanned {len(images)} pages, found QR codes in {total_qr_found} pages ({total_scannable} scannable)"
+            }
+            
+        except ImportError:
+            return {
+                "success": False,
+                "error": "pdf2image library not installed",
+                "qr_found": False
+            }
+        except Exception as e:
+            logger.error(f"Error scanning PDF: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "qr_found": False
             }

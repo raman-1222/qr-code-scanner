@@ -94,6 +94,22 @@ async def call_tool(name: str, arguments: dict) -> str:
                 "error": f"Error downloading/scanning URL: {str(e)}"
             })
 
+    elif name == "scan_pdf_file":
+        pdf_path = arguments.get("pdf_path")
+        if not pdf_path:
+            return json.dumps({"error": "pdf_path is required"})
+        
+        result = qr_scanner.scan_pdf_file(pdf_path)
+        return json.dumps(result, indent=2)
+
+    elif name == "scan_pdf_base64":
+        pdf_base64 = arguments.get("pdf_base64")
+        if not pdf_base64:
+            return json.dumps({"error": "pdf_base64 is required"})
+        
+        result = qr_scanner.scan_pdf_base64(pdf_base64)
+        return json.dumps(result, indent=2)
+
     else:
         return json.dumps({"error": f"Unknown tool: {name}"})
 
@@ -142,6 +158,34 @@ async def list_tools() -> list[Tool]:
                     }
                 },
                 "required": ["url"],
+            },
+        ),
+        Tool(
+            name="scan_pdf_file",
+            description="Scan QR codes from all pages in a PDF file. Extracts images from each page and scans for QR codes.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "pdf_path": {
+                        "type": "string",
+                        "description": "Path to the PDF file",
+                    }
+                },
+                "required": ["pdf_path"],
+            },
+        ),
+        Tool(
+            name="scan_pdf_base64",
+            description="Scan QR codes from a base64-encoded PDF file. Extracts images from each page and scans for QR codes.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "pdf_base64": {
+                        "type": "string",
+                        "description": "Base64-encoded PDF file data",
+                    }
+                },
+                "required": ["pdf_base64"],
             },
         ),
     ]

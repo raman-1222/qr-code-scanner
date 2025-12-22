@@ -163,6 +163,50 @@ class QRScannerClient:
         except FileNotFoundError as e:
             return {"error": str(e)}
 
+    def scan_pdf(self, pdf_path: str) -> Dict[str, Any]:
+        """
+        Scan QR codes from all pages in a PDF file
+        
+        Args:
+            pdf_path: Path to PDF file
+            
+        Returns:
+            Scan results for each page
+        """
+        try:
+            with open(pdf_path, 'rb') as f:
+                files = {'file': f}
+                response = self.session.post(
+                    f"{self.api_url}/scan/pdf",
+                    files=files
+                )
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            return {"error": str(e)}
+        except FileNotFoundError:
+            return {"error": f"File not found: {pdf_path}"}
+
+    def scan_pdf_base64(self, pdf_data: str) -> Dict[str, Any]:
+        """
+        Scan QR codes from a base64-encoded PDF
+        
+        Args:
+            pdf_data: Base64-encoded PDF data
+            
+        Returns:
+            Scan results for each page
+        """
+        try:
+            response = self.session.post(
+                f"{self.api_url}/scan/pdf-base64",
+                json={"pdf_base64": pdf_data}
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            return {"error": str(e)}
+
 
 # Convenience functions for quick use
 

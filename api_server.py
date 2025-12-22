@@ -186,6 +186,55 @@ async def scan_batch(data: dict):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/scan/pdf")
+async def scan_pdf(file: UploadFile = File(...)):
+    """
+    Scan QR codes from all pages in a PDF file
+    
+    Upload a PDF and get QR code scan results for each page
+    """
+    try:
+        import tempfile
+        from pathlib import Path
+        
+        contents = await file.read()
+        
+        # Save to temporary file
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(contents)
+            tmp_path = tmp.name
+        
+        try:
+            result = qr_scanner.scan_pdf_file(tmp_path)
+            return JSONResponse(content=result)
+        finally:
+            # Clean up temp file
+            Path(tmp_path).unlink(missing_ok=True)
+            
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/scan/pdf-base64")
+async def scan_pdf_base64(data: dict):
+    """
+    Scan QR codes from a base64-encoded PDF file
+    
+    Expected JSON:
+    {
+        "pdf_base64": "base64-encoded-pdf-string"
+    }
+    """
+    try:
+        if "pdf_base64" not in data:
+            raise ValueError("Missing 'pdf_base64' in request body")
+        
+        result = qr_scanner.scan_pdf_base64(data["pdf_base64"])
+        return JSONResponse(content=result)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     import os
