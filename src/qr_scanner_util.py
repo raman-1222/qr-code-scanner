@@ -96,26 +96,44 @@ class QRCodeScanner:
             Analysis results
         """
         try:
-            # Detect QR code
+            # Preprocess image for better QR detection
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            
+            # Apply contrast enhancement for better detection
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(gray)
+            
+            # Detect QR codes with OpenCV
             ret_val, decoded_info, points, straight_qr = (
-                self.qr_detector.detectAndDecodeMulti(image)
+                self.qr_detector.detectAndDecodeMulti(enhanced)
             )
 
+            # If OpenCV multi-detection fails, try single detection
             if not ret_val or not decoded_info:
-                # Try single QR detection as fallback
                 ret_val, decoded_info, points = self.qr_detector.detectAndDecode(
-                    image
+                    enhanced
                 )
 
                 if not decoded_info:
-                    return {
-                        "success": True,
-                        "qr_found": False,
-                        "scannable": False,
-                        "message": "No QR code detected in the image",
-                    }
-
-                decoded_info = [decoded_info]
+                    # Try pyzbar as fallback for missed QR codes
+                    from pyzbar import pyzbar
+                    pyzbar_results = pyzbar.decode(image)
+                    
+                    if pyzbar_results:
+                        decoded_info = [result.data.decode('utf-8') for result in pyzbar_results]
+                    else:
+                        return {
+                            "success": True,
+                            "qr_found": False,
+                            "scannable": False,
+                            "message": "No QR code detected in the image",
+                        }
+                else:
+                    decoded_info = [decoded_info]
+            else:
+                # Ensure decoded_info is a list
+                if isinstance(decoded_info, str):
+                    decoded_info = [decoded_info]
 
             # Process detected QR codes
             qr_results = []
