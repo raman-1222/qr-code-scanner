@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: qr-scanner
+    env: python
+    plan: free
+    buildCommand: |
+      apt-get update && \
+      apt-get install -y libsm6 libxext6 libxrender-dev libgl1-mesa-glx && \
+      pip install -r requirements.txt
+    startCommand: python api_server.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11
