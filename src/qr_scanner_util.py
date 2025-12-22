@@ -117,7 +117,12 @@ class QRCodeScanner:
 
             # If multi-detection didn't work, try single detection
             if not decoded_info:
-                ret_val, single_qr, points, straight_qr = self.qr_detector.detectAndDecode(enhanced)
+                result = self.qr_detector.detectAndDecode(enhanced)
+                # Handle both return formats (3 or 4 values depending on OpenCV version)
+                if len(result) == 4:
+                    ret_val, single_qr, points, straight_qr = result
+                else:
+                    ret_val, single_qr, points = result
                 
                 if single_qr:
                     decoded_info = [single_qr]
