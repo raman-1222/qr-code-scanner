@@ -103,37 +103,32 @@ class QRCodeScanner:
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             enhanced = clahe.apply(gray)
             
-            # Detect QR codes with OpenCV
+            # Detect QR codes with OpenCV - try multi-detection first
             ret_val, decoded_info, points, straight_qr = (
                 self.qr_detector.detectAndDecodeMulti(enhanced)
             )
 
-            # If OpenCV multi-detection fails, try single detection
-            if not ret_val or not decoded_info:
-                ret_val, decoded_info, points = self.qr_detector.detectAndDecode(
-                    enhanced
-                )
-
-                if not decoded_info:
-                    # Try pyzbar as fallback for missed QR codes
-                    from pyzbar import pyzbar
-                    pyzbar_results = pyzbar.decode(image)
-                    
-                    if pyzbar_results:
-                        decoded_info = [result.data.decode('utf-8') for result in pyzbar_results]
-                    else:
-                        return {
-                            "success": True,
-                            "qr_found": False,
-                            "scannable": False,
-                            "message": "No QR code detected in the image",
-                        }
-                else:
-                    decoded_info = [decoded_info]
+            # Process multi-detection results
+            if ret_val and decoded_info:
+                # Filter out empty strings from decoded_info
+                decoded_info = [info for info in decoded_info if info]
             else:
-                # Ensure decoded_info is a list
-                if isinstance(decoded_info, str):
-                    decoded_info = [decoded_info]
+                decoded_info = []
+
+            # If multi-detection didn't work, try single detection
+            if not decoded_info:
+                ret_val, single_qr = self.qr_detector.detectAndDecode(enhanced)
+                
+                if single_qr:
+                    decoded_info = [single_qr]
+                else:
+                    # No QR codes found
+                    return {
+                        "success": True,
+                        "qr_found": False,
+                        "scannable": False,
+                        "message": "No QR code detected in the image",
+                    }
 
             # Process detected QR codes
             qr_results = []
