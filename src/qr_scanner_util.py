@@ -109,9 +109,18 @@ class QRCodeScanner:
             )
 
             # Process multi-detection results
-            if ret_val and decoded_info:
+            # ret_val might be a numpy array, so check if it's not empty/False
+            if isinstance(ret_val, (list, tuple)):
+                has_detection = len(ret_val) > 0
+            else:
+                has_detection = bool(ret_val)
+            
+            if has_detection and decoded_info is not None:
                 # Filter out empty strings from decoded_info
-                decoded_info = [info for info in decoded_info if info]
+                if isinstance(decoded_info, list):
+                    decoded_info = [info for info in decoded_info if info]
+                else:
+                    decoded_info = [decoded_info] if decoded_info else []
             else:
                 decoded_info = []
 
