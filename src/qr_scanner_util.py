@@ -125,8 +125,11 @@ class QRCodeScanner:
                     for qr_data in decoded_list:
                         if qr_data is not None:
                             qr_str = str(qr_data).strip().strip("()' \"")
-                            if qr_str and len(qr_str) > 0:
-                                qr_codes.append(qr_str)
+                            # Skip if it looks like coordinate points (contains brackets/numbers)
+                            if qr_str and len(qr_str) > 0 and not (qr_str.startswith('[') and '.' in qr_str):
+                                # Also skip if it's just numbers (looks like coordinates)
+                                if not all(c.isdigit() or c.isspace() or c in '.,[]()-' for c in qr_str):
+                                    qr_codes.append(qr_str)
             except Exception as e:
                 logger.debug(f"Multi-detection processing failed: {e}")
             
