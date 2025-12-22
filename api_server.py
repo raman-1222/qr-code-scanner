@@ -186,35 +186,6 @@ async def scan_batch(data: dict):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/scan/pdf")
-async def scan_pdf(file: UploadFile = File(...)):
-    """
-    Scan QR codes from all pages in a PDF file
-    
-    Upload a PDF and get QR code scan results for each page
-    """
-    try:
-        import tempfile
-        from pathlib import Path
-        
-        contents = await file.read()
-        
-        # Save to temporary file
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(contents)
-            tmp_path = tmp.name
-        
-        try:
-            result = qr_scanner.scan_pdf_file(tmp_path)
-            return JSONResponse(content=result)
-        finally:
-            # Clean up temp file
-            Path(tmp_path).unlink(missing_ok=True)
-            
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
 @app.post("/scan/pdf-base64")
 async def scan_pdf_base64(data: dict):
     """
@@ -231,6 +202,74 @@ async def scan_pdf_base64(data: dict):
         
         result = qr_scanner.scan_pdf_base64(data["pdf_base64"])
         return JSONResponse(content=result)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/scan/pdf-url")
+async def scan_pdf_url(data: dict):
+    """
+    Scan QR codes from a PDF file at a URL
+    
+    Expected JSON:
+    {
+        "url": "https://example.com/document.pdf"
+    }
+    
+    Downloads the PDF and scans all pages for QR codes
+    """
+    try:
+        if "url" not in data:
+            raise ValueError("Missing 'url' in request body")
+        
+        url = data["url"]
+        
+        # Validate URL
+        if not url.startswith(('http://', 'https://')):
+            raise ValueError("URL must start with http:// or https://")
+        
+        # Download PDF
+        headers = {'User-Agent': 'QR-Code-Scanner/1.0'}
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        
+        # Convert to base64
+        pdf_data = base64.b64encode(response.content).decode('utf-8')
+        
+        # Scan the PDF
+        result = qr_scanner.scan_pdf_base64(pdf_data)
+        return JSONResponse(content=result)
+        
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=408, detail="Request timeout - PDF URL took too long to respond")
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(status_code=503, detail="Could not connect to PDF URL")
+    except requests.exceptions.HTTPError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=f"HTTP error: {e}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error scanning PDF URL: {str(e)}")
+
+
+@app.post("/scan/pdf")
+async def scan_pdf(file: UploadFile = File(...)):
+    """
+    Scan QR codes from all pages in a PDF file
+    
+    Upload a PDF and get QR code scan results for each page
+    """
+    try:
+        import tempfile
+        from pathlib import Path
+        
+        contents = await file.read()
+        
+        # Convert to base64 and scan
+        pdf_base64 = base64.b64encode(contents).decode('utf-8')
+        result = qr_scanner.scan_pdf_base64(pdf_base64)
+        return JSONResponse(content=result)
+            
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
