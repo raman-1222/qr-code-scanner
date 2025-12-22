@@ -18,11 +18,9 @@ RUN pip install --no-cache-dir -r requirements.txt && \
 COPY src/ ./src/
 COPY qr_client.py .
 COPY api_server.py .
-COPY start.sh .
-RUN chmod +x start.sh
 
-# Use PORT env variable (set by Cloud Run as 8080, default to 8000)
+# Use PORT env variable (set by Cloud Run/Render)
 ENV PORT=8080
 
 # Run the HTTP API server
-CMD ["./start.sh"]
+CMD exec python api_server.py
