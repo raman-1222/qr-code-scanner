@@ -24,6 +24,15 @@ class QRCodeScanner:
     """Pure QR code detection and scanning utility"""
 
     def __init__(self):
+        # OpenCV can emit noisy warnings like:
+        # "decodingProcess QR: ECI is not supported properly".
+        # This doesn't necessarily mean decoding failed (URLs often still decode),
+        # but it can flood logs on hosted environments.
+        try:
+            if os.getenv("OPENCV_LOG_LEVEL", "ERROR").upper() == "ERROR":
+                cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+        except Exception:
+            pass
         self.qr_detector = cv2.QRCodeDetector()
 
     def scan_image_file(self, image_path: str) -> dict[str, Any]:
