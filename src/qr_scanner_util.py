@@ -7,6 +7,9 @@ import base64
 import logging
 from typing import Any
 from io import BytesIO
+import os
+import tempfile
+import gc
 
 import cv2
 import numpy as np
@@ -237,19 +240,45 @@ class QRCodeScanner:
         """
         try:
             from pdf2image import convert_from_path
+            from pdf2image.pdf2image import pdfinfo_from_path
             
             logger.info(f"Scanning PDF: {pdf_path}")
             
-            # Convert PDF pages to images at higher DPI for better QR detection
-            images = convert_from_path(pdf_path, dpi=300)
-            logger.info(f"Extracted {len(images)} pages from PDF")
+            # Render pages one-by-one to avoid holding the entire PDF as images in memory.
+            base_dpi = int(os.getenv("PDF_DPI", "200"))
+            retry_dpi = int(os.getenv("PDF_RETRY_DPI", "300"))
+
+            info = pdfinfo_from_path(pdf_path)
+            total_pages = int(info.get("Pages", 0))
+            if total_pages <= 0:
+                raise ValueError("Could not determine PDF page count")
+
+            logger.info(f"PDF has {total_pages} pages (dpi={base_dpi}, retry_dpi={retry_dpi})")
             
-            all_results = []
+            all_results: list[dict[str, Any]] = []
             total_qr_found = 0
             total_scannable = 0
             
-            for page_num, image in enumerate(images, 1):
-                # Convert PIL image to numpy array
+            for page_num in range(1, total_pages + 1):
+                # Convert just this page
+                images = convert_from_path(
+                    pdf_path,
+                    dpi=base_dpi,
+                    first_page=page_num,
+                    last_page=page_num,
+                )
+                if not images:
+                    result = {
+                        "success": True,
+                        "qr_found": False,
+                        "scannable": False,
+                        "message": "Failed to render PDF page",
+                        "page_number": page_num,
+                    }
+                    all_results.append(result)
+                    continue
+
+                image = images[0]
                 img_array = np.array(image)
                 
                 # Convert to BGR if RGB
@@ -258,6 +287,25 @@ class QRCodeScanner:
                 
                 # Scan this page
                 result = self._analyze_qr_code(img_array)
+
+                # If no QR found at lower DPI, retry this page only at higher DPI.
+                if (not result.get("qr_found")) and retry_dpi > base_dpi:
+                    try:
+                        images_retry = convert_from_path(
+                            pdf_path,
+                            dpi=retry_dpi,
+                            first_page=page_num,
+                            last_page=page_num,
+                        )
+                        if images_retry:
+                            img_retry = np.array(images_retry[0])
+                            if len(img_retry.shape) == 3 and img_retry.shape[2] == 3:
+                                img_retry = cv2.cvtColor(img_retry, cv2.COLOR_RGB2BGR)
+                            result_retry = self._analyze_qr_code(img_retry)
+                            if result_retry.get("qr_found"):
+                                result = result_retry
+                    except Exception as e:
+                        logger.debug(f"Retry render at dpi={retry_dpi} failed for page {page_num}: {e}")
                 result["page_number"] = page_num
                 all_results.append(result)
                 
@@ -265,15 +313,25 @@ class QRCodeScanner:
                     total_qr_found += 1
                 if result.get("scannable"):
                     total_scannable += 1
+
+                # Drop references ASAP to keep memory flat.
+                try:
+                    del image
+                    del images
+                    del img_array
+                except Exception:
+                    pass
+                if page_num % 2 == 0:
+                    gc.collect()
             
             return {
                 "success": True,
-                "total_pages": len(images),
+                "total_pages": total_pages,
                 "pages_with_qr": total_qr_found,
                 "pages_scannable": total_scannable,
                 "qr_count": sum(r.get("qr_count", 0) for r in all_results),
                 "pages": all_results,
-                "message": f"Scanned {len(images)} pages, found QR codes in {total_qr_found} pages ({total_scannable} scannable)"
+                "message": f"Scanned {total_pages} pages, found QR codes in {total_qr_found} pages ({total_scannable} scannable)"
             }
             
         except ImportError:
@@ -301,47 +359,21 @@ class QRCodeScanner:
             Dictionary with results for each page
         """
         try:
-            from pdf2image import convert_from_bytes
-            
-            # Decode base64
+            # Decode base64 then scan via temp file to keep memory usage low.
             pdf_data = base64.b64decode(pdf_base64)
-            logger.info("Scanning base64-encoded PDF")
-            
-            # Convert PDF to images
-            images = convert_from_bytes(pdf_data, dpi=300)
-            logger.info(f"Extracted {len(images)} pages from PDF")
-            
-            all_results = []
-            total_qr_found = 0
-            total_scannable = 0
-            
-            for page_num, image in enumerate(images, 1):
-                # Convert PIL image to numpy array
-                img_array = np.array(image)
-                
-                # Convert to BGR if RGB
-                if len(img_array.shape) == 3 and img_array.shape[2] == 3:
-                    img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-                
-                # Scan this page
-                result = self._analyze_qr_code(img_array)
-                result["page_number"] = page_num
-                all_results.append(result)
-                
-                if result.get("qr_found"):
-                    total_qr_found += 1
-                if result.get("scannable"):
-                    total_scannable += 1
-            
-            return {
-                "success": True,
-                "total_pages": len(images),
-                "pages_with_qr": total_qr_found,
-                "pages_scannable": total_scannable,
-                "qr_count": sum(r.get("qr_count", 0) for r in all_results),
-                "pages": all_results,
-                "message": f"Scanned {len(images)} pages, found QR codes in {total_qr_found} pages ({total_scannable} scannable)"
-            }
+            logger.info("Scanning base64-encoded PDF (temp file)")
+
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                tmp.write(pdf_data)
+                tmp_path = tmp.name
+
+            try:
+                return self.scan_pdf_file(tmp_path)
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
             
         except ImportError:
             return {

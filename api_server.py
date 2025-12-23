@@ -228,17 +228,28 @@ async def scan_pdf_url(data: dict):
         if not url.startswith(('http://', 'https://')):
             raise ValueError("URL must start with http:// or https://")
         
-        # Download PDF
+        # Download PDF to a temp file (avoids holding both bytes + base64 in memory)
+        import tempfile
+        import os
+
         headers = {'User-Agent': 'QR-Code-Scanner/1.0'}
-        response = requests.get(url, headers=headers, timeout=30)
-        response.raise_for_status()
-        
-        # Convert to base64
-        pdf_data = base64.b64encode(response.content).decode('utf-8')
-        
-        # Scan the PDF
-        result = qr_scanner.scan_pdf_base64(pdf_data)
-        return JSONResponse(content=result)
+        with requests.get(url, headers=headers, timeout=30, stream=True) as response:
+            response.raise_for_status()
+
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                tmp_path = tmp.name
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        tmp.write(chunk)
+
+        try:
+            result = qr_scanner.scan_pdf_file(tmp_path)
+            return JSONResponse(content=result)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
         
     except requests.exceptions.Timeout:
         raise HTTPException(status_code=408, detail="Request timeout - PDF URL took too long to respond")
@@ -261,14 +272,22 @@ async def scan_pdf(file: UploadFile = File(...)):
     """
     try:
         import tempfile
-        from pathlib import Path
-        
+        import os
+
         contents = await file.read()
-        
-        # Convert to base64 and scan
-        pdf_base64 = base64.b64encode(contents).decode('utf-8')
-        result = qr_scanner.scan_pdf_base64(pdf_base64)
-        return JSONResponse(content=result)
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(contents)
+            tmp_path = tmp.name
+
+        try:
+            result = qr_scanner.scan_pdf_file(tmp_path)
+            return JSONResponse(content=result)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
             
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
