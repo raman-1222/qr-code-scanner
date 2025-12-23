@@ -2,12 +2,13 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies for OpenCV and PDF processing
+# Install system dependencies for OpenCV, PDF processing, and zbar (pyzbar)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libsm6 \
     libxext6 \
     libxrender-dev \
     poppler-utils \
+    libzbar0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
