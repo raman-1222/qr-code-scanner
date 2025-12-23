@@ -102,54 +102,63 @@ class QRCodeScanner:
             # Apply contrast enhancement for better detection
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             enhanced = clahe.apply(gray)
-            
-            # Detect QR codes with OpenCV - try multiple rotations for tilted codes
+
+            # Upscale for small/tilted codes
+            upscaled = cv2.resize(enhanced, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+            # Adaptive threshold to increase edge contrast
+            thresh = cv2.adaptiveThreshold(upscaled, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                           cv2.THRESH_BINARY, 31, 10)
+
             qr_codes: list[str] = []
             angles = [0, -25, 25, -45, 45, 90]
+            image_variants = [enhanced, upscaled, thresh]
 
-            for angle in angles:
-                try:
-                    if angle == 0:
-                        rotated = enhanced
-                    else:
-                        h, w = enhanced.shape[:2]
-                        M = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
-                        rotated = cv2.warpAffine(enhanced, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-
-                    ret_val, decoded_info, points, straight_qr = (
-                        self.qr_detector.detectAndDecodeMulti(rotated)
-                    )
-
-                    if decoded_info is not None:
-                        if isinstance(decoded_info, np.ndarray):
-                            decoded_list = decoded_info.tolist()
-                        elif isinstance(decoded_info, (list, tuple)):
-                            decoded_list = list(decoded_info)
+            for variant in image_variants:
+                for angle in angles:
+                    try:
+                        if angle == 0:
+                            rotated = variant
                         else:
-                            decoded_list = [decoded_info]
+                            h, w = variant.shape[:2]
+                            M = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
+                            rotated = cv2.warpAffine(variant, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
 
-                        for qr_data in decoded_list:
-                            if qr_data is None:
-                                continue
+                        ret_val, decoded_info, points, straight_qr = (
+                            self.qr_detector.detectAndDecodeMulti(rotated)
+                        )
 
-                            qr_str = str(qr_data).strip().strip("()' \"")
-                            if not qr_str:
-                                continue
-                            # Reject coordinate blobs
-                            if qr_str[0] == '[':
-                                continue
-                            if all(c.isdigit() or c.isspace() or c in '.,[]()-' for c in qr_str):
-                                continue
-                            has_letters = any(c.isalpha() for c in qr_str)
-                            if has_letters or qr_str.startswith(('http://', 'https://', 'ftp://')):
-                                qr_codes.append(qr_str)
+                        if decoded_info is not None:
+                            if isinstance(decoded_info, np.ndarray):
+                                decoded_list = decoded_info.tolist()
+                            elif isinstance(decoded_info, (list, tuple)):
+                                decoded_list = list(decoded_info)
+                            else:
+                                decoded_list = [decoded_info]
 
-                    if qr_codes:
-                        break  # stop rotating once we found something
-                except Exception as e:
-                    logger.debug(f"Rotation {angle} detection failed: {e}")
+                            for qr_data in decoded_list:
+                                if qr_data is None:
+                                    continue
 
-            # If still nothing, try single detect on original enhanced image
+                                qr_str = str(qr_data).strip().strip("()' \"")
+                                if not qr_str:
+                                    continue
+                                # Reject coordinate blobs
+                                if qr_str[0] == '[':
+                                    continue
+                                if all(c.isdigit() or c.isspace() or c in '.,[]()-' for c in qr_str):
+                                    continue
+                                has_letters = any(c.isalpha() for c in qr_str)
+                                if has_letters or qr_str.startswith(('http://', 'https://', 'ftp://')):
+                                    qr_codes.append(qr_str)
+
+                        if qr_codes:
+                            break  # stop rotating once we found something
+                    except Exception as e:
+                        logger.debug(f"Rotation {angle} detection failed: {e}")
+                if qr_codes:
+                    break
+
+            # If still nothing, try single detect on enhanced image
             if not qr_codes:
                 try:
                     result = self.qr_detector.detectAndDecode(enhanced)
