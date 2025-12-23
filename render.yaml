@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: qr-code-scanner
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: bash build.sh
+    startCommand: gunicorn -w 4 -b 0.0.0.0:$PORT api_server:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
