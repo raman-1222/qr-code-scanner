@@ -123,19 +123,23 @@ class QRCodeScanner:
                     
                     # Clean up and collect valid QR codes
                     for qr_data in decoded_list:
-                        if qr_data is not None:
-                            qr_str = str(qr_data).strip().strip("()' \"")
-                            # Skip coordinate data - it has pattern like [[x y] [x y]]
-                            if qr_str and len(qr_str) > 0:
-                                # Check if it looks like actual QR data, not coordinates
-                                # Coordinates have lots of dots and brackets/numbers only
-                                has_letters = any(c.isalpha() for c in qr_str)
-                                if has_letters or qr_str.startswith(('http://', 'https://', 'ftp://')):
-                                    # This looks like actual QR data
-                                    qr_codes.append(qr_str)
-                                elif not qr_str.startswith('['):
-                                    # If it doesn't start with bracket, it's probably not coordinates
-                                    qr_codes.append(qr_str)
+                        if qr_data is None:
+                            continue
+
+                        qr_str = str(qr_data).strip().strip("()' \"")
+                        if not qr_str:
+                            continue
+
+                        # Reject obvious coordinate blobs (all digits/commas/brackets/periods)
+                        if qr_str[0] == '[':
+                            continue
+                        if all(c.isdigit() or c.isspace() or c in '.,[]()-' for c in qr_str):
+                            continue
+
+                        # Accept only if it looks like real content (has letters or URL-like)
+                        has_letters = any(c.isalpha() for c in qr_str)
+                        if has_letters or qr_str.startswith(('http://', 'https://', 'ftp://')):
+                            qr_codes.append(qr_str)
             except Exception as e:
                 logger.debug(f"Multi-detection processing failed: {e}")
             
@@ -203,8 +207,8 @@ class QRCodeScanner:
             
             logger.info(f"Scanning PDF: {pdf_path}")
             
-            # Convert PDF pages to images
-            images = convert_from_path(pdf_path)
+            # Convert PDF pages to images at higher DPI for better QR detection
+            images = convert_from_path(pdf_path, dpi=300)
             logger.info(f"Extracted {len(images)} pages from PDF")
             
             all_results = []
@@ -271,7 +275,7 @@ class QRCodeScanner:
             logger.info("Scanning base64-encoded PDF")
             
             # Convert PDF to images
-            images = convert_from_bytes(pdf_data)
+            images = convert_from_bytes(pdf_data, dpi=300)
             logger.info(f"Extracted {len(images)} pages from PDF")
             
             all_results = []
