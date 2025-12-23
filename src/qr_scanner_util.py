@@ -162,23 +162,6 @@ class QRCodeScanner:
             if not qr_codes:
                 try:
                     result = self.qr_detector.detectAndDecode(enhanced)
-                # Fallback: pyzbar decode (better at some tilted codes)
-                if not qr_codes:
-                    try:
-                        from pyzbar import pyzbar
-
-                        # Try on grayscale and thresholded versions
-                        candidates = [enhanced, upscaled, thresh]
-                        for cand in candidates:
-                            decoded = pyzbar.decode(cand)
-                            for d in decoded:
-                                data = d.data.decode('utf-8').strip()
-                                if data:
-                                    qr_codes.append(data)
-                            if qr_codes:
-                                break
-                    except Exception as e:
-                        logger.debug(f"pyzbar fallback failed: {e}")
                     single_qr = result[1] if len(result) > 1 else None
 
                     if single_qr is not None:
@@ -186,7 +169,25 @@ class QRCodeScanner:
                         if qr_str and len(qr_str) > 0:
                             qr_codes.append(qr_str)
                 except Exception as e:
-                    logger.debug(f"Single detection failed: {e}")            
+                    logger.debug(f"Single detection failed: {e}")
+
+            # Fallback: pyzbar decode (better at some tilted codes)
+            if not qr_codes:
+                try:
+                    from pyzbar import pyzbar
+
+                    # Try on grayscale and thresholded versions
+                    candidates = [enhanced, upscaled, thresh]
+                    for cand in candidates:
+                        decoded = pyzbar.decode(cand)
+                        for d in decoded:
+                            data = d.data.decode('utf-8').strip()
+                            if data:
+                                qr_codes.append(data)
+                        if qr_codes:
+                            break
+                except Exception as e:
+                    logger.debug(f"pyzbar fallback failed: {e}")            
             # Return results
             if qr_codes:
                 qr_results = [
