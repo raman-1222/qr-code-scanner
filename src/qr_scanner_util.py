@@ -103,52 +103,58 @@ class QRCodeScanner:
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             enhanced = clahe.apply(gray)
             
-            # Detect QR codes with OpenCV - try multi-detection first
-            ret_val, decoded_info, points, straight_qr = (
-                self.qr_detector.detectAndDecodeMulti(enhanced)
-            )
+            # Detect QR codes with OpenCV - try multiple rotations for tilted codes
+            qr_codes: list[str] = []
+            angles = [0, -25, 25, -45, 45, 90]
 
-            # Simplify: just try to get a list of detected QR codes
-            qr_codes = []
-            
-            try:
-                # Handle multi-detection
-                if decoded_info is not None:
-                    if isinstance(decoded_info, np.ndarray):
-                        decoded_list = decoded_info.tolist()
-                    elif isinstance(decoded_info, (list, tuple)):
-                        decoded_list = list(decoded_info)
+            for angle in angles:
+                try:
+                    if angle == 0:
+                        rotated = enhanced
                     else:
-                        decoded_list = [decoded_info]
-                    
-                    # Clean up and collect valid QR codes
-                    for qr_data in decoded_list:
-                        if qr_data is None:
-                            continue
+                        h, w = enhanced.shape[:2]
+                        M = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
+                        rotated = cv2.warpAffine(enhanced, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
 
-                        qr_str = str(qr_data).strip().strip("()' \"")
-                        if not qr_str:
-                            continue
+                    ret_val, decoded_info, points, straight_qr = (
+                        self.qr_detector.detectAndDecodeMulti(rotated)
+                    )
 
-                        # Reject obvious coordinate blobs (all digits/commas/brackets/periods)
-                        if qr_str[0] == '[':
-                            continue
-                        if all(c.isdigit() or c.isspace() or c in '.,[]()-' for c in qr_str):
-                            continue
+                    if decoded_info is not None:
+                        if isinstance(decoded_info, np.ndarray):
+                            decoded_list = decoded_info.tolist()
+                        elif isinstance(decoded_info, (list, tuple)):
+                            decoded_list = list(decoded_info)
+                        else:
+                            decoded_list = [decoded_info]
 
-                        # Accept only if it looks like real content (has letters or URL-like)
-                        has_letters = any(c.isalpha() for c in qr_str)
-                        if has_letters or qr_str.startswith(('http://', 'https://', 'ftp://')):
-                            qr_codes.append(qr_str)
-            except Exception as e:
-                logger.debug(f"Multi-detection processing failed: {e}")
-            
-            # If no codes found, try single detection
+                        for qr_data in decoded_list:
+                            if qr_data is None:
+                                continue
+
+                            qr_str = str(qr_data).strip().strip("()' \"")
+                            if not qr_str:
+                                continue
+                            # Reject coordinate blobs
+                            if qr_str[0] == '[':
+                                continue
+                            if all(c.isdigit() or c.isspace() or c in '.,[]()-' for c in qr_str):
+                                continue
+                            has_letters = any(c.isalpha() for c in qr_str)
+                            if has_letters or qr_str.startswith(('http://', 'https://', 'ftp://')):
+                                qr_codes.append(qr_str)
+
+                    if qr_codes:
+                        break  # stop rotating once we found something
+                except Exception as e:
+                    logger.debug(f"Rotation {angle} detection failed: {e}")
+
+            # If still nothing, try single detect on original enhanced image
             if not qr_codes:
                 try:
                     result = self.qr_detector.detectAndDecode(enhanced)
                     single_qr = result[1] if len(result) > 1 else None
-                    
+
                     if single_qr is not None:
                         qr_str = str(single_qr).strip().strip("()' \"")
                         if qr_str and len(qr_str) > 0:
