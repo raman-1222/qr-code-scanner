@@ -5,6 +5,9 @@ Core QR scanning logic - independent of any AI framework
 
 import base64
 import logging
+import gc
+import os
+import tempfile
 from typing import Any
 from io import BytesIO
 import os
@@ -100,23 +103,20 @@ class QRCodeScanner:
         """
         try:
             # Preprocess image for better QR detection
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            if image.ndim == 2:
+                gray = image
+            else:
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             
             # Apply contrast enhancement for better detection
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             enhanced = clahe.apply(gray)
 
-            # Upscale for small/tilted codes
-            upscaled = cv2.resize(enhanced, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
-            # Adaptive threshold to increase edge contrast
-            thresh = cv2.adaptiveThreshold(upscaled, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                           cv2.THRESH_BINARY, 31, 10)
-
             qr_codes: list[str] = []
-            angles = [0, -25, 25, -45, 45, 90]
-            image_variants = [enhanced, upscaled, thresh]
+            angles = [0, 90, 180, 270]
 
-            for variant in image_variants:
+            def _run_detection(variant: np.ndarray) -> None:
+                nonlocal qr_codes
                 for angle in angles:
                     try:
                         if angle == 0:
@@ -124,7 +124,13 @@ class QRCodeScanner:
                         else:
                             h, w = variant.shape[:2]
                             M = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
-                            rotated = cv2.warpAffine(variant, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+                            rotated = cv2.warpAffine(
+                                variant,
+                                M,
+                                (w, h),
+                                flags=cv2.INTER_LINEAR,
+                                borderMode=cv2.BORDER_REPLICATE,
+                            )
 
                         ret_val, decoded_info, points, straight_qr = (
                             self.qr_detector.detectAndDecodeMulti(rotated)
@@ -153,13 +159,42 @@ class QRCodeScanner:
                                 has_letters = any(c.isalpha() for c in qr_str)
                                 if has_letters or qr_str.startswith(('http://', 'https://', 'ftp://')):
                                     qr_codes.append(qr_str)
-
-                        if qr_codes:
-                            break  # stop rotating once we found something
                     except Exception as e:
                         logger.debug(f"Rotation {angle} detection failed: {e}")
-                if qr_codes:
-                    break
+
+            # Pass 1: cheapest path (enhanced only)
+            _run_detection(enhanced)
+
+            # Pass 2: only if nothing found, try heavier preprocessing.
+            if not qr_codes:
+                # Upscale only when the image is relatively small; avoid huge memory spikes.
+                max_dim = max(enhanced.shape[:2])
+                if max_dim < 1800:
+                    upscaled = cv2.resize(enhanced, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+                else:
+                    upscaled = enhanced
+
+                # Adaptive threshold can be expensive on very large images; cap its size.
+                if max(upscaled.shape[:2]) > 2200:
+                    scale = 2200 / float(max(upscaled.shape[:2]))
+                    new_w = int(upscaled.shape[1] * scale)
+                    new_h = int(upscaled.shape[0] * scale)
+                    upscaled_for_thresh = cv2.resize(upscaled, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                else:
+                    upscaled_for_thresh = upscaled
+
+                thresh = cv2.adaptiveThreshold(
+                    upscaled_for_thresh,
+                    255,
+                    cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                    cv2.THRESH_BINARY,
+                    31,
+                    10,
+                )
+
+                _run_detection(upscaled)
+                if not qr_codes:
+                    _run_detection(thresh)
 
             # If still nothing, try single detect on enhanced image
             if not qr_codes:
@@ -180,7 +215,11 @@ class QRCodeScanner:
                     from pyzbar import pyzbar
 
                     # Try on grayscale and thresholded versions
-                    candidates = [enhanced, upscaled, thresh]
+                    candidates = [enhanced]
+                    try:
+                        candidates.append(thresh)
+                    except Exception:
+                        pass
                     for cand in candidates:
                         decoded = pyzbar.decode(cand)
                         for d in decoded:
@@ -245,8 +284,10 @@ class QRCodeScanner:
             logger.info(f"Scanning PDF: {pdf_path}")
             
             # Render pages one-by-one to avoid holding the entire PDF as images in memory.
-            base_dpi = int(os.getenv("PDF_DPI", "200"))
-            retry_dpi = int(os.getenv("PDF_RETRY_DPI", "300"))
+            # Keep memory low on Render free tier: default to a lower DPI.
+            base_dpi = int(os.getenv("PDF_DPI", "150"))
+            retry_dpi = int(os.getenv("PDF_RETRY_DPI", "200"))
+            max_retry_pages = int(os.getenv("PDF_MAX_RETRY_PAGES", "5"))
 
             info = pdfinfo_from_path(pdf_path)
             total_pages = int(info.get("Pages", 0))
@@ -258,6 +299,7 @@ class QRCodeScanner:
             all_results: list[dict[str, Any]] = []
             total_qr_found = 0
             total_scannable = 0
+            retry_budget = max_retry_pages
             
             for page_num in range(1, total_pages + 1):
                 # Convert just this page
@@ -279,17 +321,32 @@ class QRCodeScanner:
                     continue
 
                 image = images[0]
+
+                # Convert to grayscale early to reduce memory footprint.
+                try:
+                    image = image.convert("L")
+                except Exception:
+                    pass
+
+                # Downscale very large pages before NumPy conversion.
+                try:
+                    w, h = image.size
+                    max_side = int(os.getenv("PDF_MAX_SIDE", "1800"))
+                    if max(w, h) > max_side:
+                        scale = max_side / float(max(w, h))
+                        new_w = max(1, int(w * scale))
+                        new_h = max(1, int(h * scale))
+                        image = image.resize((new_w, new_h))
+                except Exception:
+                    pass
+
                 img_array = np.array(image)
-                
-                # Convert to BGR if RGB
-                if len(img_array.shape) == 3 and img_array.shape[2] == 3:
-                    img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
                 
                 # Scan this page
                 result = self._analyze_qr_code(img_array)
 
                 # If no QR found at lower DPI, retry this page only at higher DPI.
-                if (not result.get("qr_found")) and retry_dpi > base_dpi:
+                if (not result.get("qr_found")) and retry_dpi > base_dpi and retry_budget > 0:
                     try:
                         images_retry = convert_from_path(
                             pdf_path,
@@ -298,9 +355,24 @@ class QRCodeScanner:
                             last_page=page_num,
                         )
                         if images_retry:
-                            img_retry = np.array(images_retry[0])
-                            if len(img_retry.shape) == 3 and img_retry.shape[2] == 3:
-                                img_retry = cv2.cvtColor(img_retry, cv2.COLOR_RGB2BGR)
+                            retry_budget -= 1
+                            img_retry_pil = images_retry[0]
+                            try:
+                                img_retry_pil = img_retry_pil.convert("L")
+                            except Exception:
+                                pass
+                            try:
+                                w2, h2 = img_retry_pil.size
+                                max_side = int(os.getenv("PDF_MAX_SIDE", "1800"))
+                                if max(w2, h2) > max_side:
+                                    scale = max_side / float(max(w2, h2))
+                                    new_w2 = max(1, int(w2 * scale))
+                                    new_h2 = max(1, int(h2 * scale))
+                                    img_retry_pil = img_retry_pil.resize((new_w2, new_h2))
+                            except Exception:
+                                pass
+
+                            img_retry = np.array(img_retry_pil)
                             result_retry = self._analyze_qr_code(img_retry)
                             if result_retry.get("qr_found"):
                                 result = result_retry
