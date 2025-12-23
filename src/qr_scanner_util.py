@@ -242,13 +242,40 @@ class QRCodeScanner:
                     for cand in candidates:
                         decoded = pyzbar.decode(cand)
                         for d in decoded:
+                            # Only accept QR codes, not other barcode types
+                            if d.type != 'QRCODE':
+                                continue
                             data = d.data.decode('utf-8').strip()
                             if data:
                                 qr_codes.append(data)
                         if qr_codes:
                             break
                 except Exception as e:
-                    logger.debug(f"pyzbar fallback failed: {e}")            
+                    logger.debug(f"pyzbar fallback failed: {e}")
+            
+            # Fallback: QReader (neural network-based, more robust)
+            if not qr_codes:
+                try:
+                    from qreader import QReader
+                    
+                    # QReader works best with color images
+                    if image.ndim == 2:
+                        color_image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+                    else:
+                        color_image = image
+                    
+                    qreader = QReader()
+                    decoded_texts = qreader.detect_and_decode(image=color_image)
+                    
+                    if decoded_texts:
+                        for text in decoded_texts:
+                            if text and isinstance(text, str):
+                                qr_codes.append(text.strip())
+                                logger.debug(f"QReader found QR code: {text}")
+                except ImportError:
+                    logger.debug("QReader not available, skipping")
+                except Exception as e:
+                    logger.debug(f"QReader fallback failed: {e}")            
             # Return results
             if qr_codes:
                 qr_results = [

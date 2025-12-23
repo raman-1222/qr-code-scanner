@@ -10,3 +10,4 @@ uvicorn>=0.24.0
 requests>=2.31.0
 pdf2image>=1.16.3
 PyPDF2>=3.0.0
+qreader>=3.0.0
