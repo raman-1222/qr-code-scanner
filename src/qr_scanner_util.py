@@ -113,6 +113,7 @@ class QRCodeScanner:
             enhanced = clahe.apply(gray)
 
             qr_codes: list[str] = []
+            seen_qr: set[str] = set()
             angles = [0, 90, 180, 270]
 
             def _run_detection(variant: np.ndarray) -> None:
@@ -148,17 +149,26 @@ class QRCodeScanner:
                                 if qr_data is None:
                                     continue
 
-                                qr_str = str(qr_data).strip().strip("()' \"")
+                                # OpenCV can sometimes surface non-string payloads; ignore them.
+                                if not isinstance(qr_data, (str, bytes)):
+                                    continue
+
+                                qr_str = qr_data.decode("utf-8", errors="ignore") if isinstance(qr_data, bytes) else qr_data
+                                qr_str = qr_str.strip().strip("()' \"")
                                 if not qr_str:
                                     continue
-                                # Reject coordinate blobs
-                                if qr_str[0] == '[':
+
+                                # Reject coordinate/points blobs (sometimes come back as stringified arrays)
+                                qr_str_lstripped = qr_str.lstrip()
+                                if qr_str_lstripped.startswith('['):
                                     continue
-                                if all(c.isdigit() or c.isspace() or c in '.,[]()-' for c in qr_str):
+                                if all(c.isdigit() or c.isspace() or c in '.,[]()-' for c in qr_str_lstripped):
                                     continue
                                 has_letters = any(c.isalpha() for c in qr_str)
                                 if has_letters or qr_str.startswith(('http://', 'https://', 'ftp://')):
-                                    qr_codes.append(qr_str)
+                                    if qr_str not in seen_qr:
+                                        seen_qr.add(qr_str)
+                                        qr_codes.append(qr_str)
                     except Exception as e:
                         logger.debug(f"Rotation {angle} detection failed: {e}")
 
