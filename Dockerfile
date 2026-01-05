@@ -2,10 +2,16 @@ FROM python:3.11-bullseye
 
 WORKDIR /app
 
-# Full base image already has most system deps
-# Just add zbar and poppler explicitly
+# Install ALL required system dependencies for opencv-python-headless
+# This is the complete list that works on Debian bullseye
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libgomp1 \
     libzbar0 \
     poppler-utils \
     && apt-get clean \
