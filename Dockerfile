@@ -2,14 +2,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies for OpenCV, PDF processing, and zbar (pyzbar)
-# Use apt-get fix for any cache issues, then install minimal OpenGL + required libs
+# Install ALL system dependencies for OpenCV, PDF processing, and zbar
 RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends \
+    libglib2.0-0 \
+    libgl1 \
+    libgomp1 \
     libsm6 \
     libxext6 \
-    libxrender-dev \
-    libgl1 \
+    libxrender1 \
+    libgthread-2.0-0 \
     poppler-utils \
     libzbar0 \
     && apt-get clean \
