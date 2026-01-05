@@ -1,17 +1,13 @@
-FROM python:3.11-slim
+FROM python:3.11-bullseye
 
 WORKDIR /app
 
-# Install minimal system dependencies for opencv-python-headless
+# Full base image already has most system deps
+# Just add zbar and poppler explicitly
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    libglib2.0-0 \
-    libgomp1 \
-    libsm6 \
-    libxext6 \
-    libxrender1 \
-    poppler-utils \
     libzbar0 \
+    poppler-utils \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
