@@ -185,39 +185,9 @@ class QRCodeScanner:
                     except Exception as e:
                         logger.debug(f"Rotation {angle} detection failed: {e}")
 
-            # Pass 1: cheapest path (enhanced only)
+            # Pass 1: only CLAHE + 4 rotations (memory-optimized)
+            # Disabled Pass 2 (upscale/threshold) to stay within Render free tier limits
             _run_detection(enhanced)
-
-            # Pass 2: only if nothing found, try heavier preprocessing.
-            if not qr_codes:
-                # Upscale only when the image is relatively small; avoid huge memory spikes.
-                max_dim = max(enhanced.shape[:2])
-                if max_dim < 1800:
-                    upscaled = cv2.resize(enhanced, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
-                else:
-                    upscaled = enhanced
-
-                # Adaptive threshold can be expensive on very large images; cap its size.
-                if max(upscaled.shape[:2]) > 2200:
-                    scale = 2200 / float(max(upscaled.shape[:2]))
-                    new_w = int(upscaled.shape[1] * scale)
-                    new_h = int(upscaled.shape[0] * scale)
-                    upscaled_for_thresh = cv2.resize(upscaled, (new_w, new_h), interpolation=cv2.INTER_AREA)
-                else:
-                    upscaled_for_thresh = upscaled
-
-                thresh = cv2.adaptiveThreshold(
-                    upscaled_for_thresh,
-                    255,
-                    cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                    cv2.THRESH_BINARY,
-                    31,
-                    10,
-                )
-
-                _run_detection(upscaled)
-                if not qr_codes:
-                    _run_detection(thresh)
 
             # If still nothing, try single detect on enhanced image
             if not qr_codes:
@@ -228,53 +198,17 @@ class QRCodeScanner:
                 except Exception as e:
                     logger.debug(f"Single detection failed: {e}")
 
-            # Fallback: pyzbar decode (better at some tilted codes)
-            # Note: pyzbar can detect barcodes; we explicitly reject non-QRCODE types
-            if not qr_codes:
-                try:
-                    from pyzbar import pyzbar
-
-                    # Try on grayscale and thresholded versions
-                    candidates = [enhanced]
-                    try:
-                        candidates.append(thresh)
-                    except Exception:
-                        pass
-                    for cand in candidates:
-                        decoded = pyzbar.decode(cand)
-                        for d in decoded:
-                            # Only accept QR codes, explicitly reject barcodes
-                            if d.type != 'QRCODE':
-                                continue
-                            _add_qr(d.data)
-                        if qr_codes:
-                            break
-                except Exception as e:
-                    logger.debug(f"pyzbar fallback failed: {e}")
+            # Fallback: pyzbar decode (DISABLED for memory optimization on Render free tier)
+            # if not qr_codes:
+            #     try:
+            #         from pyzbar import pyzbar
+            #         ...
             
-            # Fallback: QReader (neural network-based, more robust)
-            # Note: QReader is QR-only by design, but apply validation for consistency
-            if not qr_codes:
-                try:
-                    from qreader import QReader
-                    
-                    # QReader works best with color images
-                    if image.ndim == 2:
-                        color_image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-                    else:
-                        color_image = image
-                    
-                    qreader = QReader()
-                    decoded_texts = qreader.detect_and_decode(image=color_image)
-                    
-                    if decoded_texts:
-                        for text in decoded_texts:
-                            _add_qr(text)
-                            logger.debug(f"QReader found QR code: {text}")
-                except ImportError:
-                    logger.debug("QReader not available, skipping")
-                except Exception as e:
-                    logger.debug(f"QReader fallback failed: {e}")            
+            # Fallback: QReader (DISABLED for memory optimization on Render free tier)
+            # if not qr_codes:
+            #     try:
+            #         from qreader import QReader
+            #         ...            
             # Return results
             if qr_codes:
                 qr_results = [
@@ -329,17 +263,17 @@ class QRCodeScanner:
             logger.info(f"Scanning PDF: {pdf_path}")
             
             # Render pages one-by-one to avoid holding the entire PDF as images in memory.
-            # Keep memory low on Render free tier: default to a lower DPI.
-            base_dpi = int(os.getenv("PDF_DPI", "150"))
-            retry_dpi = int(os.getenv("PDF_RETRY_DPI", "200"))
-            max_retry_pages = int(os.getenv("PDF_MAX_RETRY_PAGES", "5"))
+            # Keep memory low on Render free tier: lower DPI defaults.
+            base_dpi = int(os.getenv("PDF_DPI", "100"))
+            retry_dpi = int(os.getenv("PDF_RETRY_DPI", "150"))
+            max_retry_pages = int(os.getenv("PDF_MAX_RETRY_PAGES", "0"))
 
             info = pdfinfo_from_path(pdf_path)
             total_pages = int(info.get("Pages", 0))
             if total_pages <= 0:
                 raise ValueError("Could not determine PDF page count")
 
-            logger.info(f"PDF has {total_pages} pages (dpi={base_dpi}, retry_dpi={retry_dpi})")
+            logger.info(f"PDF has {total_pages} pages (dpi={base_dpi}, retry_dpi={retry_dpi}, max_retries={max_retry_pages})")
             
             all_results: list[dict[str, Any]] = []
             total_qr_found = 0
@@ -376,7 +310,7 @@ class QRCodeScanner:
                 # Downscale very large pages before NumPy conversion.
                 try:
                     w, h = image.size
-                    max_side = int(os.getenv("PDF_MAX_SIDE", "1800"))
+                    max_side = int(os.getenv("PDF_MAX_SIDE", "1200"))
                     if max(w, h) > max_side:
                         scale = max_side / float(max(w, h))
                         new_w = max(1, int(w * scale))
@@ -408,7 +342,7 @@ class QRCodeScanner:
                                 pass
                             try:
                                 w2, h2 = img_retry_pil.size
-                                max_side = int(os.getenv("PDF_MAX_SIDE", "1800"))
+                                max_side = int(os.getenv("PDF_MAX_SIDE", "1200"))
                                 if max(w2, h2) > max_side:
                                     scale = max_side / float(max(w2, h2))
                                     new_w2 = max(1, int(w2 * scale))
@@ -421,6 +355,7 @@ class QRCodeScanner:
                             result_retry = self._analyze_qr_code(img_retry)
                             if result_retry.get("qr_found"):
                                 result = result_retry
+                            del img_retry
                     except Exception as e:
                         logger.debug(f"Retry render at dpi={retry_dpi} failed for page {page_num}: {e}")
                 result["page_number"] = page_num
@@ -438,8 +373,7 @@ class QRCodeScanner:
                     del img_array
                 except Exception:
                     pass
-                if page_num % 2 == 0:
-                    gc.collect()
+                gc.collect()  # Aggressive: collect after every page
             
             return {
                 "success": True,

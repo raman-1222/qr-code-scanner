@@ -3,6 +3,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install ALL system dependencies for OpenCV, PDF processing, and zbar
+# Option: install full opencv from apt (larger but guaranteed to work)
 RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends \
     libglib2.0-0 \
@@ -12,6 +13,10 @@ RUN apt-get update -qq && \
     libxext6 \
     libxrender1 \
     libgthread-2.0-0 \
+    libatlas-base-dev \
+    libavcodec58 \
+    libavformat58 \
+    libswscale5 \
     poppler-utils \
     libzbar0 \
     && apt-get clean \
