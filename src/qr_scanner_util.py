@@ -125,6 +125,32 @@ class QRCodeScanner:
             seen_qr: set[str] = set()
             angles = [0, 90, 180, 270]
 
+            def _add_qr(value: object) -> None:
+                """Validate and deduplicate QR payload."""
+                nonlocal qr_codes, seen_qr
+                if value is None:
+                    return
+                if not isinstance(value, (str, bytes)):
+                    return
+                s = value.decode("utf-8", errors="ignore") if isinstance(value, bytes) else value
+                s = s.strip().strip("()' \"")
+                if not s:
+                    return
+                s_l = s.lstrip()
+                # Reject coordinate/points blobs (stringified arrays)
+                if s_l.startswith("["):
+                    return
+                # Reject numeric/shape-ish blobs (all digits, spaces, brackets, commas, etc.)
+                if all(c.isdigit() or c.isspace() or c in ".,[]()-" for c in s_l):
+                    return
+                # Require either letters or a URL scheme
+                has_letters = any(c.isalpha() for c in s)
+                if not (has_letters or s.startswith(("http://", "https://", "ftp://"))):
+                    return
+                if s not in seen_qr:
+                    seen_qr.add(s)
+                    qr_codes.append(s)
+
             def _run_detection(variant: np.ndarray) -> None:
                 nonlocal qr_codes
                 for angle in angles:
@@ -155,29 +181,7 @@ class QRCodeScanner:
                                 decoded_list = [decoded_info]
 
                             for qr_data in decoded_list:
-                                if qr_data is None:
-                                    continue
-
-                                # OpenCV can sometimes surface non-string payloads; ignore them.
-                                if not isinstance(qr_data, (str, bytes)):
-                                    continue
-
-                                qr_str = qr_data.decode("utf-8", errors="ignore") if isinstance(qr_data, bytes) else qr_data
-                                qr_str = qr_str.strip().strip("()' \"")
-                                if not qr_str:
-                                    continue
-
-                                # Reject coordinate/points blobs (sometimes come back as stringified arrays)
-                                qr_str_lstripped = qr_str.lstrip()
-                                if qr_str_lstripped.startswith('['):
-                                    continue
-                                if all(c.isdigit() or c.isspace() or c in '.,[]()-' for c in qr_str_lstripped):
-                                    continue
-                                has_letters = any(c.isalpha() for c in qr_str)
-                                if has_letters or qr_str.startswith(('http://', 'https://', 'ftp://')):
-                                    if qr_str not in seen_qr:
-                                        seen_qr.add(qr_str)
-                                        qr_codes.append(qr_str)
+                                _add_qr(qr_data)
                     except Exception as e:
                         logger.debug(f"Rotation {angle} detection failed: {e}")
 
@@ -220,15 +224,12 @@ class QRCodeScanner:
                 try:
                     result = self.qr_detector.detectAndDecode(enhanced)
                     single_qr = result[1] if len(result) > 1 else None
-
-                    if single_qr is not None:
-                        qr_str = str(single_qr).strip().strip("()' \"")
-                        if qr_str and len(qr_str) > 0:
-                            qr_codes.append(qr_str)
+                    _add_qr(single_qr)
                 except Exception as e:
                     logger.debug(f"Single detection failed: {e}")
 
             # Fallback: pyzbar decode (better at some tilted codes)
+            # Note: pyzbar can detect barcodes; we explicitly reject non-QRCODE types
             if not qr_codes:
                 try:
                     from pyzbar import pyzbar
@@ -242,18 +243,17 @@ class QRCodeScanner:
                     for cand in candidates:
                         decoded = pyzbar.decode(cand)
                         for d in decoded:
-                            # Only accept QR codes, not other barcode types
+                            # Only accept QR codes, explicitly reject barcodes
                             if d.type != 'QRCODE':
                                 continue
-                            data = d.data.decode('utf-8').strip()
-                            if data:
-                                qr_codes.append(data)
+                            _add_qr(d.data)
                         if qr_codes:
                             break
                 except Exception as e:
                     logger.debug(f"pyzbar fallback failed: {e}")
             
             # Fallback: QReader (neural network-based, more robust)
+            # Note: QReader is QR-only by design, but apply validation for consistency
             if not qr_codes:
                 try:
                     from qreader import QReader
@@ -269,9 +269,8 @@ class QRCodeScanner:
                     
                     if decoded_texts:
                         for text in decoded_texts:
-                            if text and isinstance(text, str):
-                                qr_codes.append(text.strip())
-                                logger.debug(f"QReader found QR code: {text}")
+                            _add_qr(text)
+                            logger.debug(f"QReader found QR code: {text}")
                 except ImportError:
                     logger.debug("QReader not available, skipping")
                 except Exception as e:
