@@ -198,17 +198,19 @@ class QRCodeScanner:
                 except Exception as e:
                     logger.debug(f"Single detection failed: {e}")
 
-            # Fallback: pyzbar decode (DISABLED for memory optimization on Render free tier)
-            # if not qr_codes:
-            #     try:
-            #         from pyzbar import pyzbar
-            #         ...
+            # Fallback: pyzbar (lightweight, good for tilted QR codes)
+            if not qr_codes:
+                try:
+                    from pyzbar import pyzbar
+                    decoded = pyzbar.decode(enhanced)
+                    for d in decoded:
+                        if d.type != 'QRCODE':
+                            continue
+                        _add_qr(d.data)
+                except Exception as e:
+                    logger.debug(f"pyzbar fallback failed: {e}")
             
-            # Fallback: QReader (DISABLED for memory optimization on Render free tier)
-            # if not qr_codes:
-            #     try:
-            #         from qreader import QReader
-            #         ...            
+            # QReader disabled (neural network too heavy for 512MB tier)            
             # Return results
             if qr_codes:
                 qr_results = [
@@ -263,10 +265,10 @@ class QRCodeScanner:
             logger.info(f"Scanning PDF: {pdf_path}")
             
             # Render pages one-by-one to avoid holding the entire PDF as images in memory.
-            # Keep memory low on Render free tier: lower DPI defaults.
-            base_dpi = int(os.getenv("PDF_DPI", "100"))
-            retry_dpi = int(os.getenv("PDF_RETRY_DPI", "150"))
-            max_retry_pages = int(os.getenv("PDF_MAX_RETRY_PAGES", "0"))
+            # Quality-optimized: higher DPI + smart retries, still low memory (1 page at a time)
+            base_dpi = int(os.getenv("PDF_DPI", "150"))
+            retry_dpi = int(os.getenv("PDF_RETRY_DPI", "200"))
+            max_retry_pages = int(os.getenv("PDF_MAX_RETRY_PAGES", "3"))
 
             info = pdfinfo_from_path(pdf_path)
             total_pages = int(info.get("Pages", 0))
@@ -310,7 +312,7 @@ class QRCodeScanner:
                 # Downscale very large pages before NumPy conversion.
                 try:
                     w, h = image.size
-                    max_side = int(os.getenv("PDF_MAX_SIDE", "1200"))
+                    max_side = int(os.getenv("PDF_MAX_SIDE", "1500"))
                     if max(w, h) > max_side:
                         scale = max_side / float(max(w, h))
                         new_w = max(1, int(w * scale))
@@ -342,7 +344,7 @@ class QRCodeScanner:
                                 pass
                             try:
                                 w2, h2 = img_retry_pil.size
-                                max_side = int(os.getenv("PDF_MAX_SIDE", "1200"))
+                                max_side = int(os.getenv("PDF_MAX_SIDE", "1500"))
                                 if max(w2, h2) > max_side:
                                     scale = max_side / float(max(w2, h2))
                                     new_w2 = max(1, int(w2 * scale))
