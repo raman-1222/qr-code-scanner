@@ -185,9 +185,42 @@ class QRCodeScanner:
                     except Exception as e:
                         logger.debug(f"Rotation {angle} detection failed: {e}")
 
-            # Pass 1: only CLAHE + 4 rotations (memory-optimized)
-            # Disabled Pass 2 (upscale/threshold) to stay within Render free tier limits
+            # Pass 1: cheapest path (enhanced only)
             _run_detection(enhanced)
+
+            # Pass 2: if nothing found, try heavier preprocessing
+            if not qr_codes:
+                # Upscale only when image is relatively small
+                max_dim = max(enhanced.shape[:2])
+                if max_dim < 2000:
+                    upscaled = cv2.resize(enhanced, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+                else:
+                    upscaled = enhanced
+
+                # Adaptive threshold (capped to prevent excessive processing)
+                if max(upscaled.shape[:2]) > 2500:
+                    scale = 2500 / float(max(upscaled.shape[:2]))
+                    new_w = int(upscaled.shape[1] * scale)
+                    new_h = int(upscaled.shape[0] * scale)
+                    upscaled_for_thresh = cv2.resize(upscaled, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                else:
+                    upscaled_for_thresh = upscaled
+
+                thresh = cv2.adaptiveThreshold(
+                    upscaled_for_thresh,
+                    255,
+                    cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                    cv2.THRESH_BINARY,
+                    31,
+                    10,
+                )
+
+                _run_detection(upscaled)
+                if not qr_codes:
+                    _run_detection(thresh)
+                
+                # Cleanup temp arrays immediately
+                del upscaled, upscaled_for_thresh, thresh
 
             # If still nothing, try single detect on enhanced image
             if not qr_codes:
@@ -210,7 +243,29 @@ class QRCodeScanner:
                 except Exception as e:
                     logger.debug(f"pyzbar fallback failed: {e}")
             
-            # QReader disabled (neural network too heavy for 512MB tier)            
+            # Fallback: QReader (neural network-based, best quality)
+            # Only use if still nothing found and image is reasonable size
+            if not qr_codes and max(image.shape[:2]) < 3000:
+                try:
+                    from qreader import QReader
+                    
+                    # QReader works best with color images
+                    if image.ndim == 2:
+                        color_image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+                    else:
+                        color_image = image
+                    
+                    qreader = QReader()
+                    # detect_and_decode has built-in timeout, no infinite loop risk
+                    decoded_texts = qreader.detect_and_decode(image=color_image)
+                    
+                    if decoded_texts:
+                        for text in decoded_texts:
+                            _add_qr(text)
+                except ImportError:
+                    logger.debug("QReader not available, skipping")
+                except Exception as e:
+                    logger.debug(f"QReader fallback failed: {e}")            
             # Return results
             if qr_codes:
                 qr_results = [
